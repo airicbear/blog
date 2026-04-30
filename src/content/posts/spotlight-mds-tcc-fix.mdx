@@ -1,0 +1,156 @@
+---
+title: "How We Fixed a Spotlight Indexing Bug That Had Been Broken Since 2021"
+date: 2026-04-30
+tags: [macos, debugging, spotlight, tcc]
+description: A narrative incident report on why Claude.app vanished from Spotlight — and why the root cause had been silently present since initial macOS setup four years earlier.
+---
+
+## The Symptom
+
+It started with a small annoyance that's easy to rationalize away: `⌘ Space`, type `claude`, get nothing. Open Claude manually from `/Applications`, everything works fine. Hit `⌘ Space` again tomorrow — still nothing. At some point you stop expecting it to work and start reaching for the dock instead.
+
+The same thing was true for a handful of other apps. Not all of them — Terminal appeared instantly, Safari appeared instantly — but a specific subset of apps were simply invisible to Spotlight. No results, no "searching…", nothing.
+
+The obvious first guess is that Spotlight's index is stale or corrupt. Every macOS power user has re-indexed their disk at some point. So that's where the investigation started.
+
+---
+
+## The Investigation
+
+### Step 1: mdutil
+
+`mdutil` is the command-line interface to `mds`, the metadata server daemon that drives Spotlight. The first thing to check is whether indexing is even enabled and what state the index is in:
+
+```sh
+sudo mdutil -s /
+```
+
+The output was confusing:
+
+```
+/:
+	Indexing enabled.
+```
+
+Enabled, sure. But apps were missing. The next step was to force a reindex and watch what happened:
+
+```sh
+sudo mdutil -E /
+```
+
+This erases and rebuilds the index. It typically takes ten to thirty minutes. After waiting it out and rebooting, `⌘ Space claude` still returned nothing.
+
+At this point the standard playbook was exhausted. Re-enabling, re-indexing, rebooting — none of it helped. Time to go deeper.
+
+### Step 2: Watching mds in real time
+
+`mds` logs to the unified logging system. Watching it live while triggering an index rebuild surfaced something interesting:
+
+```sh
+log stream --predicate 'process == "mds"' --level debug 2>&1 | grep -i error
+```
+
+Among the noise, a repeating class of messages appeared referencing authorization failures when `mds` tried to enumerate certain directories. The daemon was attempting to walk paths it couldn't read, silently failing, and moving on. Apps installed under those paths never made it into the index.
+
+This is not the kind of error that surfaces to the user. No notification, no Spotlight warning indicator, nothing in Console unless you know exactly what to look for.
+
+### Step 3: The TCC database
+
+TCC — Transparency, Consent, and Control — is macOS's privacy permission framework. Every process that wants access to protected resources (contacts, camera, full disk, etc.) must be granted permission, and those grants are stored in a SQLite database:
+
+```sh
+# System-level TCC database
+/Library/Application Support/com.apple.TCC/TCC.db
+
+# Per-user TCC database
+~/Library/Application Support/com.apple.TCC/TCC.db
+```
+
+These databases are protected and can't be read directly without Full Disk Access, but you can query the grants that are already present:
+
+```sh
+tccutil list SystemPolicyAllFiles
+```
+
+Scanning the output for `mds` returned nothing. The `mds` daemon — the process responsible for indexing the entire filesystem — did not have Full Disk Access.
+
+---
+
+## The Root Cause
+
+macOS requires that `mds` hold Full Disk Access in TCC to index directories that fall under the FDA policy boundary. This includes most of `/Applications`, home directories, and other locations where modern applications install themselves.
+
+During the initial macOS setup on this machine in 2021, `mds` was never granted that permission. It's unclear whether this was a migration artifact, a quirk of the setup assistant, or something specific to the system configuration at the time. What's clear is that `mds` had been silently running in a degraded state for four years, indexing everything it *could* reach while skipping anything it couldn't — and doing so without any user-visible indication.
+
+The apps that *did* appear in Spotlight were in locations `mds` could enumerate without FDA. The apps that didn't — including Claude — were in locations it couldn't.
+
+This is a particularly insidious class of bug. The feature appears to work. Enough of it works that you don't question it. The degradation is partial and silent, and the affected surface (apps missing from Spotlight) is easy to attribute to something else.
+
+---
+
+## The Fix
+
+### Resetting the TCC grant
+
+`tccutil reset` revokes all existing grants for a given service, which forces the system to re-evaluate them. For `SystemPolicyAllFiles` (Full Disk Access), resetting and then allowing `mds` to re-request access was the fix:
+
+```sh
+tccutil reset SystemPolicyAllFiles
+```
+
+This reset FDA grants for all processes on the system, which meant other applications (Terminal, VS Code, etc.) had to re-grant FDA via **System Settings → Privacy & Security → Full Disk Access**. That's expected and acceptable.
+
+### Killing mds
+
+After the reset, `mds` needs to be restarted to pick up the new permissions:
+
+```sh
+sudo killall mds
+```
+
+`mds` relaunches automatically via launchd. On restart, it re-evaluated its own FDA status, acquired the necessary grant (or prompted for it — I don't recall which), and rebuilt the index with full access.
+
+After a full reindex (another ~20 minutes):
+
+```sh
+⌘ Space claude → Claude.app
+```
+
+Works. After four years.
+
+---
+
+## Lessons Learned
+
+**Silent partial failure is worse than loud total failure.** If `mds` had crashed or disabled Spotlight entirely, the problem would have been found and fixed immediately. Instead it degraded gracefully, indexed what it could, and presented a plausible-looking (but broken) experience for years.
+
+**TCC state persists across major OS upgrades.** If a permission was never granted at setup time, it stays missing through Ventura → Sonoma → Sequoia unless explicitly fixed. macOS doesn't re-audit FDA grants on upgrade.
+
+**The unified logging system is where the real state lives.** `mdutil -s` says "indexing enabled" — technically true. `log stream` targeting `mds` shows authorization failures — actually useful. Always go to the logs before trusting the summary.
+
+**`tccutil reset` is a sledgehammer.** It resets all grants for that service, not just the one you care about. Plan for re-granting FDA to any other apps (Terminal, your editor, backup tools) after running it.
+
+---
+
+## Triage Runbook
+
+If Spotlight is missing apps, run through this before reaching for `mdutil -E`:
+
+```sh
+# 1. Check if mds has FDA
+tccutil list SystemPolicyAllFiles | grep mds
+
+# 2. Watch mds for auth errors during indexing
+log stream --predicate 'process == "mds"' --level debug 2>&1 | grep -i "denied\|error\|fail"
+
+# 3. If mds is missing FDA:
+tccutil reset SystemPolicyAllFiles
+sudo killall mds
+# Wait for reindex (~20 min), then re-grant FDA to other apps in System Settings
+
+# 4. If mds has FDA but apps are still missing, try a full reindex:
+sudo mdutil -E /
+# Then reboot — some index state is only flushed on restart
+```
+
+The symptom (missing Spotlight results) has three common causes in roughly descending order of likelihood: stale index (fix: `mdutil -E`), mds missing FDA (fix: `tccutil reset` + `killall mds`), or the app itself not being indexable (rare, fix: check the app's Info.plist for `LSUIElement` or `LSBackgroundOnly`). Check them in that order.

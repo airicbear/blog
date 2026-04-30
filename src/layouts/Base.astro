@@ -1,0 +1,43 @@
+---
+import '../styles/global.css';
+import ThemeToggle from '../components/ThemeToggle.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = 'Eric Nguyen\'s technical blog' } = Astro.props;
+const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="canonical" href={canonicalURL} />
+  <meta name="description" content={description} />
+  <title>{title}</title>
+  <script is:inline>
+    // Set dark mode before render to avoid flash
+    const theme = localStorage.getItem('theme');
+    if (theme === 'light') document.documentElement.classList.add('light');
+  </script>
+</head>
+<body class="min-h-screen" style="background-color: var(--bg); color: var(--fg);">
+  <div class="max-w-2xl mx-auto px-6 py-12">
+    <header class="flex items-center justify-between mb-16">
+      <a href="/" class="text-sm font-medium" style="color: var(--fg);">
+        nguyene.com/blog
+      </a>
+      <ThemeToggle />
+    </header>
+    <main>
+      <slot />
+    </main>
+    <footer class="mt-20 pt-6 text-xs" style="color: var(--muted); border-top: 1px solid var(--border);">
+      Eric Nguyen &mdash; <a href="https://nguyene.com" style="color: var(--muted);">nguyene.com</a>
+    </footer>
+  </div>
+</body>
+</html>

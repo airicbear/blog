@@ -1,0 +1,31 @@
+---
+---
+<button
+  id="theme-toggle"
+  aria-label="Toggle light/dark mode"
+  class="text-sm px-2 py-1 border border-[var(--border)] hover:border-[var(--muted)] transition-colors rounded"
+  style="color: var(--muted);"
+>
+  <span id="theme-label">light</span>
+</button>
+
+<script>
+  const root = document.documentElement;
+  const btn = document.getElementById('theme-toggle')!;
+  const label = document.getElementById('theme-label')!;
+
+  const stored = localStorage.getItem('theme');
+  const isDark = stored ? stored === 'dark' : true;
+
+  function setTheme(dark: boolean) {
+    root.classList.toggle('light', !dark);
+    label.textContent = dark ? 'light' : 'dark';
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  }
+
+  setTheme(isDark);
+
+  btn.addEventListener('click', () => {
+    setTheme(root.classList.contains('light'));
+  });
+</script>

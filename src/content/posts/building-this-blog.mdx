@@ -1,0 +1,128 @@
+---
+title: "Building This Blog: From AWS Cleanup to Cloudflare Pages in One Session"
+date: 2026-05-01
+tags: [astro, cloudflare, aws, devops]
+description: A walkthrough of how this blog was built — DNS archaeology, Astro scaffolding, a wrangler deploy, and a CI secret that ended up as its own secret name.
+---
+
+This blog was built in a single sitting. Here's what actually happened.
+
+---
+
+## Starting Point: Two Hosted Zones, One Domain
+
+Before any code was written, there was an AWS problem to solve. The domain `nguyene.com` had accumulated a second Route 53 hosted zone in a secondary AWS account (`personal-main`, account `975255469097`). The live DNS was being served from a different account entirely (`personal-dns`, account `851725437026`), where nameservers were actually delegated. The stale zone in `personal-main` was dead weight — not authoritative, not serving traffic, but holding seven non-default records that needed to go before the zone itself could be deleted.
+
+The records were:
+
+- `nguyene.com` A → CloudFront alias `d220wcj8cxrsdx.cloudfront.net`
+- `nguyene.com` MX → iCloud mail
+- `nguyene.com` TXT → SPF + `apple-domain` verification
+- `_b4c9c698462933043d3cd2c15e67869a.nguyene.com` CNAME → ACM validation
+- `sig1._domainkey.nguyene.com` CNAME → iCloud DKIM
+- `septa-api-demo.nguyene.com` CNAME → Vercel
+- `tip-calculator.nguyene.com` CNAME → Firebase
+
+Route 53 won't let you delete a hosted zone that still has non-default records (anything beyond the NS and SOA), so all seven went out in a single `change-resource-record-sets` batch with `Action: DELETE`. Then the zone was deleted.
+
+One thing worth noting about the TXT record: the original plan listed the SPF record, but the actual RRset had two values — the SPF and an `apple-domain` verification string. Route 53 requires you to specify the complete RRset when deleting, so both values had to be included. Partial RRset deletes aren't a thing.
+
+---
+
+## Archaeology on the Live Zone
+
+With the stale zone gone, the next step was mapping the live zone (`Z01445991MW4N1KIET4I` in `personal-dns`). A few things stood out:
+
+**`blog.nguyene.com` already existed.** It was an A alias record pointing to a separate CloudFront distribution (`d1hbjaijwmy97t.cloudfront.net`) — different from the root domain's CloudFront distribution. There was also an ACM validation CNAME for it, meaning a certificate had previously been issued. Whatever was there before, it had been set up with some intention. That CloudFront distribution was the predecessor to this blog.
+
+**`utils.nguyene.com` has a delegated NS record** — its own hosted zone somewhere. It's a separate subdomain with independent DNS management.
+
+**`toolbox.nguyene.com`** CNAMEs to `airicbear.github.io`.
+
+The root domain at `nguyene.com` was serving HTTP 200 from S3 via CloudFront, last built January 2025 via CodeBuild in `personal-main`. That stack is separate from this blog and untouched.
+
+---
+
+## Scaffolding Astro
+
+The blog directory was empty. The requirements were:
+
+- Astro with MDX
+- Content in `src/content/posts/` with typed frontmatter (`title`, `date`, `tags`, `description`)
+- Static output (`output: 'static'`)
+- Tailwind CSS with the typography plugin
+- Monospace-forward design, dark mode default, light mode toggle
+- No analytics, no tracking, no cookie banners
+
+`npm create astro` requires Node 22. The machine had Node 20 as default (via nvm), so Node 22 was installed first. Then `create-astro` balked at the non-empty directory (the `.claude/` folder was already there), so the project was written from scratch rather than scaffolded — which worked out fine, since it meant full control over the structure with no template cruft to remove.
+
+The stack ended up as:
+
+```
+src/
+  components/ThemeToggle.astro   # dark/light toggle, localStorage-backed
+  content/
+    config.ts                    # Zod schema for frontmatter
+    posts/                       # MDX files live here
+  layouts/
+    Base.astro                   # HTML shell, font import, theme flash prevention
+    Post.astro                   # Article layout with date/tags header
+  pages/
+    index.astro                  # Post list
+    blog/[slug].astro            # Dynamic post routes
+  styles/global.css              # Tailwind + CSS custom properties for theming
+```
+
+The theme system uses CSS custom properties (`--bg`, `--fg`, `--accent`, etc.) set on `:root` for dark mode and overridden on `.light` for light mode. The toggle writes to `localStorage` and a small inline script in `<head>` reads it before render to prevent the flash of wrong theme. Dark is the default — if there's no `localStorage` entry, dark wins.
+
+One gotcha: the Google Fonts `@import` has to come before `@tailwind` directives in the CSS file. PostCSS rejects it the other way around. Moving the import to line 1 fixed it.
+
+Another: the Tailwind config initially used `await import('@tailwindcss/typography')` inside the config object, which doesn't work because Tailwind loads config files via `jiti`, which doesn't support top-level await. The fix was a regular ES module `import` at the top of the file.
+
+---
+
+## Deploying to Cloudflare Pages
+
+The deploy target was Cloudflare Pages. `wrangler` handles this from the CLI.
+
+```sh
+wrangler pages project create blog --production-branch main
+wrangler pages deploy dist --project-name blog --branch main
+```
+
+The project was created in seconds. The deploy uploaded three files (the compiled static output is small) and came back live at `https://3624b956.blog-apy.pages.dev`.
+
+To attach `blog.nguyene.com` as the custom domain, the Cloudflare Pages API accepts a POST to `/accounts/{account_id}/pages/projects/{project_name}/domains`. The domain came back with `"status": "initializing"` and `"method": "http"` for SSL validation — meaning Cloudflare would validate the cert by making an HTTP request through the domain once DNS pointed there.
+
+DNS was updated in Route 53: the old CloudFront A alias for `blog.nguyene.com` was deleted, the ACM validation CNAME for it was deleted, and a new CNAME pointing to `blog-apy.pages.dev` was created. All three changes went out in a single batch. A few minutes later the domain status flipped to `"active"`.
+
+```sh
+curl -sI https://blog.nguyene.com
+# HTTP/2 200, server: cloudflare
+```
+
+---
+
+## GitHub Actions and the Secret That Named Itself
+
+The last piece was CI: a GitHub Actions workflow that builds and deploys on every push to `main`.
+
+The workflow is straightforward — checkout, Node 22, `npm ci`, `npm run build`, then `cloudflare/wrangler-action` to deploy. It needs two repository secrets: `CLOUDFLARE_ACCOUNT_ID` (set automatically) and `CLOUDFLARE_API_TOKEN`.
+
+For the API token, `wrangler login` uses an OAuth flow that's scoped for interactive use — it's temporary and can't create other tokens. That means the Cloudflare dashboard is the only path to a persistent CI token. One was created using the "Edit Cloudflare Pages" template.
+
+The command to store it as a GitHub secret is `gh secret set CLOUDFLARE_API_TOKEN`. What actually ran was `gh secret set <the-token-value>` — which created a secret whose *name* was the token value. `gh secret list` confirmed this immediately: a very long uppercase secret name, no `CLOUDFLARE_API_TOKEN` in sight.
+
+The first CI run failed with `CLOUDFLARE_API_TOKEN environment variable` not set. The token value was recoverable from `gh secret list` (it was literally the secret name, downcased). `CLOUDFLARE_API_TOKEN` was set correctly, the misnamed secret was deleted, the run was retried, and it passed in 45 seconds.
+
+---
+
+## End State
+
+- **https://blog.nguyene.com** — live on Cloudflare Pages, SSL from Google CA
+- **DNS** — `blog.nguyene.com` CNAME → `blog-apy.pages.dev` in Route 53 (`personal-dns`)
+- **Repo** — https://github.com/airicbear/blog
+- **CI** — GitHub Actions deploys on every push to `main`
+- **Stale zone** — gone from `personal-main`
+
+The whole thing, from `aws route53 list-resource-record-sets` to `HTTP/2 200` on the custom domain, was one session.

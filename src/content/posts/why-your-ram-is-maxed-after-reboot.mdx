@@ -1,0 +1,77 @@
+---
+title: "Why Your RAM Is Maxed Out After a Reboot (And How to Fix It)"
+date: 2026-05-08
+tags: [windows, performance, gaming, ram, sysmain]
+description: A diagnosis session that traced 89% RAM usage on a fresh boot to SysMain's aggressive prefetching — and why Task Manager was hiding the real culprits.
+---
+
+Fresh reboot. Nothing open. Task Manager showing 27.7 GB of 31 GB used. Open Marvel Rivals, hit 100%, and the whole system grinds to a halt. That was the problem. Here's how we traced it.
+
+## What Task Manager Was Hiding
+
+The first instinct was to open Task Manager and sort by memory. The top offenders looked like this:
+
+| Process | RAM |
+|---|---|
+| claude (5 instances) | ~2.2 GB |
+| steamwebhelper (3 instances) | ~839 MB |
+| MsMpEng (Windows Defender) | ~375 MB |
+| SteelSeries GG (3 processes) | ~635 MB |
+| Logitech G HUB (2 processes) | ~371 MB |
+
+Reasonable suspects, but adding them all up only got to about **11.5 GB** of working set across every process on the system. Task Manager was reporting 27.7 GB in use. That's a **~16 GB gap** that wasn't showing up anywhere in the process list.
+
+The gap breaks down into three hidden buckets:
+
+1. **Non-paged pool (2.84 GB)** — kernel and driver memory. It never appears in the Processes tab because it's not owned by any userland process.
+2. **AMD iGPU shared memory** — the CPU has integrated AMD Radeon graphics that carves out system RAM. With an RTX 4070 SUPER handling all actual rendering, this reservation is pure waste.
+3. **SysMain prefetch cache (~13 GB)** — Windows was aggressively pre-loading apps and files into RAM on every boot, showing as "In Use" even though it's technically reclaimable.
+
+That third one is the real culprit.
+
+## Why It Started Happening "Recently"
+
+Two things happened in close succession:
+
+**April 17** — Windows Update KB5083769 shipped. Microsoft has changed how aggressively SysMain (formerly Superfetch) behaves in recent updates, and this one appears to have pushed the prefetch ceiling higher.
+
+**April 20** — A large dev tooling install: Visual Studio Build Tools 2026, Windows SDK, Python 3.14, Node.js. This added a lot of new binaries and files to the system. SysMain then learned these patterns and started eagerly pre-caching all of it on every subsequent boot.
+
+The result: a machine that wakes up from a reboot already at 89% RAM before you've opened a single app.
+
+## The Fix
+
+SysMain is a reasonable feature on machines with 8–16 GB of RAM where pre-caching meaningfully speeds up app launches. On a 32 GB system used for gaming, it's actively harmful — it burns RAM that games need, and you have enough memory that cold-launch times are fast anyway.
+
+Disabling it requires an elevated PowerShell session:
+
+```powershell
+Stop-Service SysMain -Force
+Set-Service SysMain -StartupType Disabled
+```
+
+Verify it worked:
+
+```powershell
+Get-Service SysMain | Select-Object Name, Status, StartType
+```
+
+You should see:
+
+```
+Name     Status  StartType
+----     ------  ---------
+SysMain  Stopped Disabled
+```
+
+The RAM won't drop immediately — the cache SysMain already built stays in memory until something else needs it. The real payoff is on the **next reboot**, where the baseline should drop from ~89% to something in the 50–60% range, leaving several GB of headroom before a game even launches.
+
+## The Other Half of the Problem
+
+Disabling SysMain addresses the software side. The iGPU shared memory is a BIOS setting — look for **"UMA Frame Buffer Size"** or **"iGPU Memory"** and set it to 512 MB or 1 GB. If you have a discrete GPU handling everything, the integrated graphics doesn't need several GB of system RAM reserved for it permanently.
+
+## Takeaway
+
+Task Manager's default view is not great for diagnosing high memory pressure. The Processes tab only shows working sets — it completely omits kernel pool memory, driver-locked pages, and prefetch cache. When the numbers don't add up, the difference is almost always hiding in one of those three places.
+
+On a gaming machine: disable SysMain, reduce iGPU shared memory in BIOS, and keep peripheral software (SteelSeries, Logitech G HUB) out of startup. Those three changes alone can recover 4–6 GB of baseline RAM.

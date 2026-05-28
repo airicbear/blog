@@ -1,0 +1,104 @@
+---
+title: "The Honest Struggles of Building Software with AI"
+date: 2026-05-27
+tags: [ai, software-development, productivity, tooling]
+description: AI coding tools promised to change everything. They kind of did — just not always in the ways the demos suggested.
+---
+
+There's a specific feeling you get when an AI autocompletes exactly the function you were about to write. It's a little uncanny, a little exciting, and enough to make you think: *this is the future.*
+
+That feeling is real. But so is the one you get two hours later, when you realize the function it completed was subtly wrong in a way that only surfaces under a specific set of conditions you didn't think to test immediately.
+
+This is what working with AI in software development actually looks like for a lot of people right now — somewhere between genuinely transformative and quietly exhausting. Here's an honest account of where it helps, where it breaks down, and what it's taught me about the nature of the work itself.
+
+---
+
+## The Confidence Problem
+
+The single most dangerous thing about current AI coding assistants is not that they're wrong. It's that they're wrong with complete confidence.
+
+Ask a senior developer a question outside their expertise, and you'll usually get qualifiers: *"I think it's X, but double-check the docs."* Ask an AI the same question, and you'll often get a clean, well-formatted, authoritative answer — even when that answer is fabricated.
+
+This shows up most painfully with APIs. AI models have training cutoffs, and libraries move fast. I've had AI suggest methods that simply don't exist in the current version of a library, complete with plausible-sounding parameter names and return types. The code looks right. It follows the patterns you'd expect. It doesn't work.
+
+The danger isn't that this happens — it's that spotting it requires knowing the library well enough to catch the hallucination. If you already know the library that well, you needed less help in the first place.
+
+---
+
+## Context Drift
+
+Long AI sessions have a particular failure mode: the AI starts forgetting what it decided earlier.
+
+You spend the first part of a session establishing constraints — a certain architecture, a naming convention, a decision to avoid a particular pattern for a specific reason. An hour later, deep in the weeds of some implementation detail, the AI suggests something that directly contradicts one of those early decisions. Not because it's wrong in isolation, but because it's operating on a slice of context that's drifted from the original plan.
+
+This isn't a criticism so much as a description of how these systems work. But it creates real friction. The mental overhead of tracking what the AI does and doesn't currently "know" about your session is non-trivial. In some cases, it's high enough that you'd have written the code faster yourself.
+
+The workaround — restating constraints, providing summaries, anchoring context — helps. But it's another thing to manage.
+
+---
+
+## The Debugging Spiral
+
+Here's a scenario that will be familiar to anyone who's used AI tools seriously:
+
+You have a bug. You describe it to the AI. It suggests a fix. The fix introduces a new bug. You describe *that* bug. It suggests another fix. That fix partially reverts the first fix but also changes something unrelated. You're now three changes deep, none of which you fully understand, and the original bug may or may not still be there.
+
+I've been in this spiral. It's easy to enter and surprisingly hard to exit, because each step feels like progress.
+
+The exit, when I've found it, is always the same: stop. Read the original code. Understand what it was actually doing before any AI suggestions touched it. The AI is good at generating plausible changes; it's not good at knowing when to stop generating.
+
+---
+
+## Almost Correct
+
+There's a category of AI output I've come to think of as "almost correct" — code that works in the happy path, handles the obvious error cases, and fails silently on the edge case you didn't think to specify.
+
+This is different from obviously broken code, which you catch immediately. Almost-correct code passes your initial tests, gets merged, and surfaces later as a bug report from a user who did something slightly unexpected.
+
+The pattern I've noticed: AI tends to solve the problem as stated, not the problem as it exists in the real world. If you describe a function that parses user input, it'll write a function that parses the inputs you described. It won't independently reason about what happens when a user pastes in a 10,000-character string, or submits a value that's technically the right type but semantically nonsensical.
+
+This isn't a fatal flaw. It's a prompt engineering problem — if you specify edge cases, you usually get code that handles them. But it means the quality of AI output is tightly coupled to your ability to anticipate failure modes in advance, which is precisely what's hard about software.
+
+---
+
+## What You Lose
+
+There's a subtler cost that doesn't show up immediately: skill atrophy in the areas where you rely on AI most.
+
+When I was learning to code, I'd get stuck on something, spend an hour working through it, and come out the other side with a slightly better mental model of how the system worked. That friction was the learning.
+
+AI removes a lot of that friction. That's mostly good — I'm shipping faster, spending less time on boilerplate, unblocking myself on syntax I don't use often enough to memorize. But I've noticed I reach for AI before I've given my own thinking time to breathe. And the result is that some skills haven't developed the way they would have otherwise.
+
+This is a tradeoff, not a condemnation. Every tool changes what you practice and what you don't. But it's worth being deliberate about which parts of your craft you want to keep sharp — and protecting those from outsourcing.
+
+---
+
+## What Actually Helps
+
+Despite all of this, I keep using these tools. Because when they work, they genuinely work.
+
+The highest-value uses I've found:
+
+**Boilerplate and scaffolding.** Setting up a new project, writing configuration files, generating test skeletons — AI is fast and reliable here. The patterns are well-established and the stakes of getting it slightly wrong are low.
+
+**Explaining unfamiliar code.** Pasting in someone else's implementation and asking what it does, or what the tradeoffs are, often yields a better explanation than the comments in the code.
+
+**First drafts.** Getting something on the screen quickly, even if it needs significant revision, is often worth more than staring at a blank file. AI is a good way to break the blank-page problem.
+
+**Rubber duck debugging.** Describing a problem to an AI forces you to articulate it precisely, which often surfaces the answer before the AI even responds.
+
+The pattern is: AI works best as a collaborator on tasks where you can quickly evaluate its output. It works worst on tasks where you can't — either because you don't know enough to catch errors, or because the error only surfaces much later.
+
+---
+
+## Where This Leaves Me
+
+The honest summary: AI has made me faster at some things and hasn't made me meaningfully better at the hard parts.
+
+The hard parts of software — understanding a system well enough to change it safely, anticipating how users will interact with something, debugging something that fails nondeterministically, making architectural decisions that don't come back to haunt you — those are still fundamentally the same. AI can assist at the edges of those problems, but it can't replace the judgment at the center.
+
+That's not a pessimistic take. It's actually clarifying. The tool is useful. The tool has limits. Knowing where one ends and the other begins is what lets you use it well.
+
+The developers I've seen get the most out of AI are the ones who treat it like a fast, knowledgeable, occasionally-overconfident junior collaborator: useful to have around, worth double-checking, and not someone you'd put in charge of anything critical without review.
+
+That framing takes some of the pressure off in both directions. You don't have to be amazed by it, and you don't have to be dismissive. It's a tool. It's a pretty good tool. And like every tool, it rewards people who bother to understand it before swinging.
